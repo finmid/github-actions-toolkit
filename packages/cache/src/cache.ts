@@ -1,7 +1,7 @@
 import * as core from '@actions/core'
 import * as path from 'path'
 import * as utils from './internal/cacheUtils'
-import * as cacheHttpClient from './internal/cacheHttpClient'
+import * as cacheHttpClient from './internal/cacheLocalClient' // Switch from HTTP to local client
 import * as cacheTwirpClient from './internal/shared/cacheTwirpClient'
 import {getCacheServiceVersion, isGhes} from './internal/config'
 import {DownloadOptions, UploadOptions} from './options'
