@@ -1,5 +1,22 @@
 # @actions/core Releases
 
+## 2.0.1
+- Bump @actions/exec from 1.1.1 to 2.0.0 [#2199](https://github.com/actions/toolkit/pull/2199)
+
+## 2.0.0
+- Add support for Node 24 [#2110](https://github.com/actions/toolkit/pull/2110)
+- Bump @actions/http-client from 2.0.1 to 3.0.0
+
+## 1.11.1
+- Fix uses of `crypto.randomUUID` on Node 18 and earlier [#1842](https://github.com/actions/toolkit/pull/1842)
+
+### 1.11.0
+- Add platform info utilities [#1551](https://github.com/actions/toolkit/pull/1551)
+- Remove dependency on `uuid` package [#1824](https://github.com/actions/toolkit/pull/1824)
+
+### 1.10.1
+- Fix error message reference in oidc utils [#1511](https://github.com/actions/toolkit/pull/1511)
+
 ### 1.10.0
 - `saveState` and `setOutput` now use environment files if available [#1178](https://github.com/actions/toolkit/pull/1178)
 - `getMultilineInput` now correctly trims whitespace by default [#1185](https://github.com/actions/toolkit/pull/1185)

@@ -6,6 +6,7 @@ import * as ifm from './interfaces'
 import * as net from 'net'
 import * as pm from './proxy'
 import * as tunnel from 'tunnel'
+import {ProxyAgent} from 'undici'
 
 export enum HttpCodes {
   OK = 200,
@@ -102,6 +103,20 @@ export class HttpClientResponse {
       })
     })
   }
+
+  async readBodyBuffer?(): Promise<Buffer> {
+    return new Promise<Buffer>(async resolve => {
+      const chunks: Buffer[] = []
+
+      this.message.on('data', (chunk: Buffer) => {
+        chunks.push(chunk)
+      })
+
+      this.message.on('end', () => {
+        resolve(Buffer.concat(chunks))
+      })
+    })
+  }
 }
 
 export function isHttps(requestUrl: string): boolean {
@@ -123,6 +138,7 @@ export class HttpClient {
   private _maxRetries = 1
   private _agent: any
   private _proxyAgent: any
+  private _proxyAgentDispatcher: any
   private _keepAlive = false
   private _disposed = false
 
@@ -259,11 +275,11 @@ export class HttpClient {
       Headers.Accept,
       MediaTypes.ApplicationJson
     )
-    additionalHeaders[Headers.ContentType] = this._getExistingOrDefaultHeader(
-      additionalHeaders,
-      Headers.ContentType,
-      MediaTypes.ApplicationJson
-    )
+    additionalHeaders[Headers.ContentType] =
+      this._getExistingOrDefaultContentTypeHeader(
+        additionalHeaders,
+        MediaTypes.ApplicationJson
+      )
     const res: HttpClientResponse = await this.post(
       requestUrl,
       data,
@@ -283,11 +299,11 @@ export class HttpClient {
       Headers.Accept,
       MediaTypes.ApplicationJson
     )
-    additionalHeaders[Headers.ContentType] = this._getExistingOrDefaultHeader(
-      additionalHeaders,
-      Headers.ContentType,
-      MediaTypes.ApplicationJson
-    )
+    additionalHeaders[Headers.ContentType] =
+      this._getExistingOrDefaultContentTypeHeader(
+        additionalHeaders,
+        MediaTypes.ApplicationJson
+      )
     const res: HttpClientResponse = await this.put(
       requestUrl,
       data,
@@ -307,11 +323,11 @@ export class HttpClient {
       Headers.Accept,
       MediaTypes.ApplicationJson
     )
-    additionalHeaders[Headers.ContentType] = this._getExistingOrDefaultHeader(
-      additionalHeaders,
-      Headers.ContentType,
-      MediaTypes.ApplicationJson
-    )
+    additionalHeaders[Headers.ContentType] =
+      this._getExistingOrDefaultContentTypeHeader(
+        additionalHeaders,
+        MediaTypes.ApplicationJson
+      )
     const res: HttpClientResponse = await this.patch(
       requestUrl,
       data,
@@ -519,7 +535,7 @@ export class HttpClient {
       handleResult(new Error(`Request timeout: ${info.options.path}`))
     })
 
-    req.on('error', function(err) {
+    req.on('error', function (err) {
       // err has statusCode property
       // res should have headers
       handleResult(err)
@@ -530,7 +546,7 @@ export class HttpClient {
     }
 
     if (data && typeof data !== 'string') {
-      data.on('close', function() {
+      data.on('close', function () {
         req.end()
       })
 
@@ -548,6 +564,17 @@ export class HttpClient {
   getAgent(serverUrl: string): http.Agent {
     const parsedUrl = new URL(serverUrl)
     return this._getAgent(parsedUrl)
+  }
+
+  getAgentDispatcher(serverUrl: string): ProxyAgent | undefined {
+    const parsedUrl = new URL(serverUrl)
+    const proxyUrl = pm.getProxyUrl(parsedUrl)
+    const useProxy = proxyUrl && proxyUrl.hostname
+    if (!useProxy) {
+      return
+    }
+
+    return this._getProxyAgentDispatcher(parsedUrl, proxyUrl)
   }
 
   private _prepareRequest(
@@ -601,16 +628,87 @@ export class HttpClient {
     return lowercaseKeys(headers || {})
   }
 
+  /**
+   * Gets an existing header value or returns a default.
+   * Handles converting number header values to strings since HTTP headers must be strings.
+   * Note: This returns string | string[] since some headers can have multiple values.
+   * For headers that must always be a single string (like Content-Type), use the
+   * specialized _getExistingOrDefaultContentTypeHeader method instead.
+   */
   private _getExistingOrDefaultHeader(
     additionalHeaders: http.OutgoingHttpHeaders,
     header: string,
     _default: string
-  ): string | number | string[] {
+  ): string | string[] {
+    let clientHeader: string | string[] | undefined
+    if (this.requestOptions && this.requestOptions.headers) {
+      const headerValue = lowercaseKeys(this.requestOptions.headers)[header]
+      if (headerValue) {
+        clientHeader =
+          typeof headerValue === 'number' ? headerValue.toString() : headerValue
+      }
+    }
+
+    const additionalValue = additionalHeaders[header]
+
+    if (additionalValue !== undefined) {
+      return typeof additionalValue === 'number'
+        ? additionalValue.toString()
+        : additionalValue
+    }
+
+    if (clientHeader !== undefined) {
+      return clientHeader
+    }
+
+    return _default
+  }
+
+  /**
+   * Specialized version of _getExistingOrDefaultHeader for Content-Type header.
+   * Always returns a single string (not an array) since Content-Type should be a single value.
+   * Converts arrays to comma-separated strings and numbers to strings to ensure type safety.
+   * This was split from _getExistingOrDefaultHeader to provide stricter typing for callers
+   * that assign the result to places expecting a string (e.g., additionalHeaders[Headers.ContentType]).
+   */
+  private _getExistingOrDefaultContentTypeHeader(
+    additionalHeaders: http.OutgoingHttpHeaders,
+    _default: string
+  ): string {
     let clientHeader: string | undefined
     if (this.requestOptions && this.requestOptions.headers) {
-      clientHeader = lowercaseKeys(this.requestOptions.headers)[header]
+      const headerValue = lowercaseKeys(this.requestOptions.headers)[
+        Headers.ContentType
+      ]
+      if (headerValue) {
+        if (typeof headerValue === 'number') {
+          clientHeader = String(headerValue)
+        } else if (Array.isArray(headerValue)) {
+          clientHeader = headerValue.join(', ')
+        } else {
+          clientHeader = headerValue
+        }
+      }
     }
-    return additionalHeaders[header] || clientHeader || _default
+
+    const additionalValue = additionalHeaders[Headers.ContentType]
+
+    // Return the first non-undefined value, converting numbers or arrays to strings if necessary
+    if (additionalValue !== undefined) {
+      if (typeof additionalValue === 'number') {
+        return String(additionalValue)
+      } else if (Array.isArray(additionalValue)) {
+        return additionalValue.join(', ')
+      } else {
+        return additionalValue
+      }
+    }
+
+    if (clientHeader !== undefined) {
+      return clientHeader
+    }
+
+    return _default
   }
 
   private _getAgent(parsedUrl: URL): http.Agent {
@@ -622,7 +720,7 @@ export class HttpClient {
       agent = this._proxyAgent
     }
 
-    if (this._keepAlive && !useProxy) {
+    if (!useProxy) {
       agent = this._agent
     }
 
@@ -663,16 +761,11 @@ export class HttpClient {
       this._proxyAgent = agent
     }
 
-    // if reusing agent across request and tunneling agent isn't assigned create a new agent
-    if (this._keepAlive && !agent) {
+    // if tunneling agent isn't assigned create a new agent
+    if (!agent) {
       const options = {keepAlive: this._keepAlive, maxSockets}
       agent = usingSsl ? new https.Agent(options) : new http.Agent(options)
       this._agent = agent
-    }
-
-    // if not using private agent and tunnel agent isn't setup then use global agent
-    if (!agent) {
-      agent = usingSsl ? https.globalAgent : http.globalAgent
     }
 
     if (usingSsl && this._ignoreSslError) {
@@ -685,6 +778,42 @@ export class HttpClient {
     }
 
     return agent
+  }
+
+  private _getProxyAgentDispatcher(parsedUrl: URL, proxyUrl: URL): ProxyAgent {
+    let proxyAgent
+
+    if (this._keepAlive) {
+      proxyAgent = this._proxyAgentDispatcher
+    }
+
+    // if agent is already assigned use that agent.
+    if (proxyAgent) {
+      return proxyAgent
+    }
+
+    const usingSsl = parsedUrl.protocol === 'https:'
+    proxyAgent = new ProxyAgent({
+      uri: proxyUrl.href,
+      pipelining: !this._keepAlive ? 0 : 1,
+      ...((proxyUrl.username || proxyUrl.password) && {
+        token: `Basic ${Buffer.from(
+          `${proxyUrl.username}:${proxyUrl.password}`
+        ).toString('base64')}`
+      })
+    })
+    this._proxyAgentDispatcher = proxyAgent
+
+    if (usingSsl && this._ignoreSslError) {
+      // we don't want to set NODE_TLS_REJECT_UNAUTHORIZED=0 since that will affect request for entire process
+      // http.RequestOptions doesn't expose a way to modify RequestOptions.agent.options
+      // we have to cast it to any and change it directly
+      proxyAgent.options = Object.assign(proxyAgent.options.requestTls || {}, {
+        rejectUnauthorized: false
+      })
+    }
+
+    return proxyAgent
   }
 
   private async _performExponentialBackoff(retryNumber: number): Promise<void> {
